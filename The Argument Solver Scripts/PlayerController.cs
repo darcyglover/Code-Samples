@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Reflection;
 using UnityEngine;
 using Unity.Netcode;
 
@@ -8,7 +10,6 @@ public class PlayerController : NetworkBehaviour
 
     //Movement Speed and Turn Speed Floats
     [SerializeField] float _speed = 5;
-    [SerializeField] float _turnSpeed = 360;
 
     //Jump Floats 
     [SerializeField] float _jumpHeight = 3;
@@ -17,22 +18,26 @@ public class PlayerController : NetworkBehaviour
     //Animator
     [SerializeField] Animator _animator;
 
-    //Gun Stuff
+    //Throwing Stuff
     public GameObject projectilePrefab;
     GameObject projectile;
+
+    [SerializeField] float throwWaitTime;
 
     ProjectileBehaviour projectileBehaviour;
 
     GameManager gameMan;
 
-    MenuMaster menuMaster;
+    MenuManager menuMan;
+
+    AmmunitionManager ammoMan;
 
     Vector3 target;
 
-    [SerializeField] Transform pistol;
+    [SerializeField] Transform projectileSpawnPoint;
 
     //Camera
-    [SerializeField] Camera _playerCamera;
+    public Camera _playerCamera;
 
     bool cameraTurnedOff;
 
@@ -47,6 +52,10 @@ public class PlayerController : NetworkBehaviour
 
     static bool isGrounded;
 
+    static bool _sliding;
+
+    static bool _noJumping;
+
     Vector3 _input;
 
     void Awake()
@@ -58,7 +67,9 @@ public class PlayerController : NetworkBehaviour
 
         gameMan = FindObjectOfType<GameManager>();
 
-        menuMaster = FindObjectOfType<MenuMaster>();
+        menuMan = FindObjectOfType<MenuManager>();
+
+        ammoMan = FindObjectOfType<AmmunitionManager>();
     }
 
     void Update()
@@ -73,35 +84,29 @@ public class PlayerController : NetworkBehaviour
             return;
         }
 
-        if (!_playerCamera.enabled)
-        {
-            _playerCamera.enabled = true;
-        }
-
-        if (!cameraTurnedOff && FindObjectsOfType<Camera>().Length > 1)
-        {
-            Camera[] cams = FindObjectsOfType<Camera>();
-
-            foreach (Camera cam in cams)
-            {
-                if (!cam.GetComponentInParent<NetworkObject>().IsOwner)
-                {
-                    cam.gameObject.SetActive(false);
-                    cameraTurnedOff = true;
-                }
-            }
-        }
-
         GatherInput();
         Jump();
         Aim();
+        Slide();
 
         if (Input.GetMouseButtonDown(0))
         {
-            ShootProjectile();
+            if (!ammoMan.ProjectileThrown(throwWaitTime))
+            {
+                return;
+            }
+
+            _animator.Play("Throwing");
+
+            if (!IsHost)
+            {
+                PlayAnimationServerRpc("Throwing");
+            }
+
+            StartCoroutine(CallMethodAfterTime(throwWaitTime, "ThrowProjectile"));
         }
     }
-
+    
     void FixedUpdate()
     {
         if (!netObj.IsOwner)
@@ -154,6 +159,43 @@ public class PlayerController : NetworkBehaviour
         }
     }
 
+    void Slide()
+    {
+        if (_input != Vector3.zero && Input.GetKeyDown(KeyCode.C))
+        {
+            if (isGrounded)
+            {
+                _animator.Play("Slide");
+
+                PlayAnimationServerRpc("Slide");
+
+                _noJumping = true;
+            }  
+        }
+    }
+
+    void SlideSpeed()
+    {
+        if (_sliding == false)
+        {
+            _speed = 10;
+            _sliding = true;
+        }
+        else
+        {
+            _speed = 5;
+            _sliding = false;
+            _noJumping = false;
+        }
+    }
+
+    void ResetSpeed()
+    {
+        _speed = 5;
+        _sliding = false;
+        _noJumping = false;
+    }
+
     void Move()
     {
         //Movement
@@ -161,19 +203,13 @@ public class PlayerController : NetworkBehaviour
 
         if (_input != Vector3.zero)
         {
-            _animator.SetBool("IsRunning", true);
-            _animator.SetBool("NotRunning", false);
+            _animator.SetBool("isRunning", true);
+            _animator.SetBool("notRunning", false);
         }
         else
         {
-            _animator.SetBool("IsRunning", false);
-            _animator.SetBool("NotRunning", true);
-        }
-
-        if (_input != Vector3.zero && Input.GetKeyDown(KeyCode.Space))
-        {
-            _animator.SetBool("IsRunning", false);
-            _animator.SetBool("IsJumping", true);
+            _animator.SetBool("isRunning", false);
+            _animator.SetBool("notRunning", true);
         }
 
         if (!IsHost)
@@ -184,19 +220,35 @@ public class PlayerController : NetworkBehaviour
 
     void Jump()
     {
+        if (_input != Vector3.zero && Input.GetKeyDown(KeyCode.Space))
+        {
+            if (_noJumping == false && isGrounded)
+            {
+                _animator.Play("Jump");
+
+                //Jump
+                float jumpingVelocity = Mathf.Sqrt(-2 * _gravityIntensity * _jumpHeight);
+                Vector3 playerVelocity = _input;
+                playerVelocity.y = jumpingVelocity;
+                _rb.velocity = playerVelocity;
+                isGrounded = !isGrounded;
+            }
+        }
+
         if (Input.GetKeyDown(KeyCode.Space) && isGrounded)
         {
+            if (_noJumping == false)
+            {
+                //Animator
+                _animator.Play("Jump");
 
-            //Animator
-            _animator.SetBool("IsGrounded", false);
-            _animator.SetBool("IsJumping", true);
-
-            //Jump
-            float jumpingVelocity = Mathf.Sqrt(-2 * _gravityIntensity * _jumpHeight);
-            Vector3 playerVelocity = _input;
-            playerVelocity.y = jumpingVelocity;
-            _rb.velocity = playerVelocity;
-            isGrounded = !isGrounded;
+                //Jump
+                float jumpingVelocity = Mathf.Sqrt(-2 * _gravityIntensity * _jumpHeight);
+                Vector3 playerVelocity = _input;
+                playerVelocity.y = jumpingVelocity;
+                _rb.velocity = playerVelocity;
+                isGrounded = !isGrounded;
+            }
         }
     }
 
@@ -205,26 +257,26 @@ public class PlayerController : NetworkBehaviour
         if (other.gameObject.CompareTag("Ground"))
         {
             isGrounded = !isGrounded;
-            _animator.SetBool("IsJumping", false);
-            _animator.SetBool("IsGrounded", true);
+            _animator.SetBool("isJumping", false);
+            _animator.SetBool("isGrounded", true);
         }
     }
 
-    public void ShootProjectile()
+    void ThrowProjectile()
     {
         target = transform.forward;
 
         if (!IsHost)
         {
-            ShootProjectileServerRpc(target);
+            ShootProjectileServerRpc(target, projectileSpawnPoint.position);
         }
         else
         {
-            projectile = Instantiate(projectilePrefab, pistol.position, Quaternion.identity);
+            projectile = Instantiate(projectilePrefab, projectileSpawnPoint.position, Quaternion.identity);
 
             projectileBehaviour = projectile.GetComponent<ProjectileBehaviour>();
 
-            projectileBehaviour.Shoot(target);
+            projectileBehaviour.Throw(target);
         }
     }
 
@@ -232,26 +284,39 @@ public class PlayerController : NetworkBehaviour
     {
         playersReady = false;
 
-        _playerCamera.enabled = false;
+        _playerCamera = null;
 
-        menuMaster.playing = false;
+        menuMan.playing = false;
+
+        gameMan.joinCodeText.Text = "";
 
         if (victory)
         {
-            menuMaster.PlayerWon();
+            menuMan.currentMenuSection = "Victory Screen";
+            menuMan.PlayerWon();
         }
         else
         {
-            menuMaster.PlayerLost();
+            menuMan.currentMenuSection = "Loss Screen";
+            menuMan.PlayerLost();
         }
     }
 
-    [ServerRpc(RequireOwnership = false)]
-    public void ShootProjectileServerRpc(Vector3 sentTarget)
+    IEnumerator CallMethodAfterTime(float waitTime, string methodName) //this can only be used to call methods which don't take overloads for now. Will look into ways to make it more modular - Darcy
     {
-        projectile = Instantiate(projectilePrefab, pistol.position, Quaternion.identity);
+        yield return new WaitForSeconds(waitTime);
 
-        projectile.GetComponent<ProjectileBehaviour>().Shoot(sentTarget);
+        MethodInfo mi = GetType().GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Instance);
+
+        mi.Invoke(this, null);
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    public void ShootProjectileServerRpc(Vector3 sentTarget, Vector3 spawnPoint)
+    {
+        projectile = Instantiate(projectilePrefab, spawnPoint, Quaternion.identity);
+
+        projectile.GetComponent<ProjectileBehaviour>().Throw(sentTarget);
     }
 
     [ServerRpc]
@@ -259,23 +324,30 @@ public class PlayerController : NetworkBehaviour
     {
         _animator = GetComponent<Animator>();
 
-        //Animation
         if (_input != Vector3.zero)
         {
-            _animator.SetBool("IsRunning", true);
-            _animator.SetBool("NotRunning", false);
+            _animator.SetBool("isRunning", true);
+            _animator.SetBool("notRunning", false);
         }
         else
         {
-            _animator.SetBool("IsRunning", false);
-            _animator.SetBool("NotRunning", true);
+            _animator.SetBool("isRunning", false);
+            _animator.SetBool("notRunning", true);
         }
 
         if (_input != Vector3.zero && Input.GetKeyDown(KeyCode.Space))
         {
-            _animator.SetBool("IsRunning", false);
-            _animator.SetBool("IsJumping", true);
+            _animator.SetBool("isRunning", false);
+            _animator.SetBool("isJumping", true);
         }
+    }
+
+    [ServerRpc(RequireOwnership = false)]
+    public void PlayAnimationServerRpc(string animationName)
+    {
+        _animator = GetComponent<Animator>();
+
+        _animator.Play(animationName);
     }
 }
 

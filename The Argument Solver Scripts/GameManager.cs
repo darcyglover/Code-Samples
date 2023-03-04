@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using MText;
@@ -6,33 +6,41 @@ using MText;
 public class GameManager : NetworkBehaviour
 {
     public Modular3DText joinCodeText;
-    [SerializeField] MText_UI_InputField joinCodeInput;
+    public MText_UI_InputField joinCodeInput;
 
     public GameObject menuCamera;
     [SerializeField] GameObject joinGameButton;
-    [SerializeField] GameObject[] weapons;
     
-    bool playersJoined;
+    public bool playersJoined, isLeft, joiningLocked;
 
-    ReadyUpManager readyMan;
+    ReadyManager readyMan;
 
-    RelayManager relaySetup;
+    RelayManager relayMan;
+
+    MenuManager menuMan;
 
     PlayerData playerData;
 
     void Awake()
     {
-        relaySetup = FindObjectOfType<RelayManager>();
+        relayMan = FindObjectOfType<RelayManager>();
 
-        readyMan = FindObjectOfType<ReadyUpManager>();
+        readyMan = FindObjectOfType<ReadyManager>();
 
         playerData = FindObjectOfType<PlayerData>();
+
+        menuMan = FindObjectOfType<MenuManager>();
     }
 
     void Update()
     {
         if(joinCodeInput.Text.Length == 6)
         {
+            if (!isLeft)
+            {
+                MoveJoinLobbyButton();
+            }
+
             joinGameButton.GetComponent<BoxCollider>().enabled = true;
 
             if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
@@ -44,12 +52,14 @@ public class GameManager : NetworkBehaviour
         }
         else
         {
-            joinGameButton.GetComponent<BoxCollider>().enabled = false;
-        }
+            if (isLeft)
+            {
+                MoveJoinLobbyButton();
 
-        if(joinCodeText.Text.Length < 1 && relaySetup.joinCode.Length > 1)
-        {
-            joinCodeText.Text = relaySetup.joinCode;
+                relayMan.wrongCode.SetActive(false);
+            }
+
+            joinGameButton.GetComponent<BoxCollider>().enabled = false;
         }
 
         if (!IsServer)
@@ -57,90 +67,107 @@ public class GameManager : NetworkBehaviour
             return;
         }
 
-        if (!playersJoined && FindObjectsOfType<PlayerController>().Length == 2)
+        if (!playersJoined && !joiningLocked && FindObjectsOfType<PlayerController>().Length == 2)
         {
             playersJoined = true;
 
             readyMan.PlayersJoined();
+
+            menuMan.ClientJoinTheLobby("Host Game Lobby");
         }
     }
 
-    public void CreateGameSetup()
+    public void StanceInput(Modular3DText input)
     {
-        relaySetup.CreateOrJoin(1, "");
+        if (IsServer)
+        {
+            StanceInputClientRpc(input.name, input.Text);
+        }
+        else
+        {
+            StanceInputServerRpc(input.name, input.Text);
+        }
+    }
+
+    void UpdateStance(string name, string text)
+    {
+        Modular3DText otherStance = GameObject.Find(name).GetComponent<Modular3DText>();
+
+        otherStance.Text = text;
+    }
+
+    public void ClientJoined()
+    {
+        joinCodeInput.GetComponent<AudioSource>().mute = true; //stops a random typewriter sound from playing when it resets the code to null
+        StartCoroutine(UnmuteSource());
+
+        joinCodeInput.Text = "";
+        menuMan.InputFieldToggle("Lobby Code - Input Field", false);
+
+        menuMan.GameLobby(false);
+
+        MoveJoinLobbyButton();
+    }
+
+    public void SetJoinCode()
+    {
+        joinCodeText.Text = relayMan.joinCode;
+
+        playersJoined = false;
+    }
+
+    public void HostGameSetup()
+    {
+        relayMan.HostOrJoin(1, "");
     }
 
     public void JoinGameSetup()
     {
-        joinCodeText.gameObject.SetActive(false);
+        joinCodeInput.GetComponent<AudioSource>().mute = true; //stops a random typewriter sound from playing when it resets the code to null
+        StartCoroutine(UnmuteSource());
+
+        joinCodeInput.Text = "";
 
         joinGameButton.SetActive(true);
     }
 
     public void JoinGame()
     {
-        joinGameButton.SetActive(false);
-
-        relaySetup.CreateOrJoin(2, joinCodeInput.Text);
+        relayMan.HostOrJoin(2, joinCodeInput.Text);
     }
 
-    public void SelectWeapon(string weaponName)
+    public void MoveJoinLobbyButton()
     {
-        PlayerController[] players = FindObjectsOfType<PlayerController>();
-
-        foreach (var p in players)
+        if (!isLeft)
         {
-            if (IsServer && p.CompareTag("Host"))
-            {
-                foreach (var w in weapons)
-                {
-                    if (w.name.Contains(weaponName) && w.name.Contains("Host"))
-                    {
-                        p.projectilePrefab = w;
+            menuMan.MoveTransform('a', new Vector3(11f, -4.15f, 2.9f), 0.75f, false, "Join Lobby Button");
 
-                        playerData.hostWeapon = w;
-                    }
-                }
-            }
-            else if(!IsServer && p.CompareTag("Client"))
-            {
-                foreach (var w in weapons)
-                {
-                    if (w.name.Contains(weaponName) && w.name.Contains("Client"))
-                    {
-                        p.projectilePrefab = w;
-
-                        playerData.clientWeapon = w;
-                    }
-                }
-            }
+            isLeft = true;
         }
-
-        if (!IsServer)
+        else
         {
-            SelectWeaponServerRpc(weaponName);
+            menuMan.MoveTransform('a', new Vector3(13f, -3.75f, 0f), 0.75f, false, "Join Lobby Button");
+
+            isLeft = false;
         }
+    }
+
+    IEnumerator UnmuteSource()
+    {
+        yield return new WaitForSeconds(0.2f);
+
+        joinCodeInput.GetComponent<AudioSource>().mute = false;
     }
 
     [ServerRpc(RequireOwnership = false)]
-    public void SelectWeaponServerRpc(string weaponName)
+    public void StanceInputServerRpc(string name, string text)
     {
-        PlayerController[] players = FindObjectsOfType<PlayerController>();
+        UpdateStance(name, text);
+    }
 
-        foreach (var p in players)
-        {
-            if (IsServer && p.CompareTag("Client"))
-            {
-                foreach (var w in weapons)
-                {
-                    if (w.name.Contains(weaponName) && w.name.Contains("Client"))
-                    {
-                        p.projectilePrefab = w;
-
-                        playerData.clientWeapon = w;
-                    }
-                }
-            }
-        }
+    [ClientRpc]
+    public void StanceInputClientRpc(string name, string text)
+    {
+        UpdateStance(name, text);
     }
 }

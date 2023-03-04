@@ -3,9 +3,9 @@ using Unity.Netcode;
 
 public class Spawner : NetworkBehaviour
 {
-    public GameObject hostPrefab, clientPrefab, readyUpManagerPrefab;
+    [SerializeField] GameObject hostPrefab, clientPrefab, readyUpManagerPrefab;
 
-    public Transform hostSpawnPoint, clientSpawnPoint;
+    [SerializeField] Transform hostSpawnPoint, clientSpawnPoint;
 
     NetworkObject netObj;
 
@@ -16,7 +16,7 @@ public class Spawner : NetworkBehaviour
 
         if (prefabId == 0)
         {
-            newPlayer  = Instantiate(hostPrefab, hostSpawnPoint);
+            newPlayer = Instantiate(hostPrefab, hostSpawnPoint);
         }
         else
         {

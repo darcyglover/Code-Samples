@@ -1,7 +1,6 @@
 using System.Collections;
 using UnityEngine;
 using Unity.Netcode;
-using DG.Tweening;
 
 public class ProjectileBehaviour : NetworkBehaviour
 {
@@ -16,8 +15,6 @@ public class ProjectileBehaviour : NetworkBehaviour
     NetworkObject netObj;
 
     public float projectileSpeed, lifeTime, rotationSpeed;
-
-    Animator animator;
 
     void Awake()
     {
@@ -41,7 +38,7 @@ public class ProjectileBehaviour : NetworkBehaviour
         }
     }
 
-    public void Throw(Vector3 sentTarget)
+    public void Shoot(Vector3 sentTarget)
     {
         netObj.SpawnAsPlayerObject(OwnerClientId);
 
@@ -50,35 +47,6 @@ public class ProjectileBehaviour : NetworkBehaviour
         projectileMoving = true;
 
         StartCoroutine(ProjectileLifetime());
-    }
-
-    void DeathAnimation()
-    {
-        PlayerController[] players = FindObjectsOfType<PlayerController>();
-
-        foreach (var p in players)
-        {
-            if (hitPlayerTag == p.tag)
-            {
-                if (p.CompareTag("Client"))
-                {
-                    animator = p.GetComponent<Animator>();
-                }
-                else
-                {
-                    animator = p.GetComponent<Animator>();
-                }
-            }
-        }
-
-        animator.Play("Death");
-
-        if (!IsHost)
-        {
-            PlayAnimationServerRpc("Death");
-        }
-
-        StartCoroutine(WaitForDeathAnimation());
     }
 
     void DespawnAfterHitting()
@@ -131,13 +99,6 @@ public class ProjectileBehaviour : NetworkBehaviour
         netObj.Despawn();
     }
 
-    IEnumerator WaitForDeathAnimation()
-    {
-        yield return new WaitForSeconds(2.3f);
-
-        DespawnServerRpc(true);
-    }
-
     IEnumerator MoveProjectile()
     {
         if (!IsOwner)
@@ -147,8 +108,7 @@ public class ProjectileBehaviour : NetworkBehaviour
 
         transform.Translate(target * Time.deltaTime * projectileSpeed, Space.World);
 
-        //transform.RotateAround(transform.GetChild(0).position, new Vector3(target.x, 0, 0), rotationSpeed * Time.deltaTime);
-        transform.DORotate(new Vector3(360, 0, 0), rotationSpeed, RotateMode.LocalAxisAdd).SetLoops(-1, LoopType.Restart).SetEase(Ease.Linear);
+        transform.RotateAround(transform.GetChild(0).position, new Vector3(target.x, 0, 0), rotationSpeed * Time.deltaTime);
 
         yield return null;
     }
@@ -173,24 +133,18 @@ public class ProjectileBehaviour : NetworkBehaviour
             {
                 return;
             }
-
-            hitPlayerTag = other.tag;
-
-            if (!IsServer)
+            else
             {
-                UpdateHitPlayerTagServerRpc(hitPlayerTag);
+                hitPlayerTag = other.tag;
+
+                if (!IsServer)
+                {
+                    UpdateHitPlayerTagServerRpc(hitPlayerTag);
+                }
+
+                DespawnServerRpc(true);           
             }
-
-            DeathAnimation();
         }
-    }
-
-    [ServerRpc(RequireOwnership = false)]
-    public void PlayAnimationServerRpc(string animationName)
-    {
-        animator = GetComponent<Animator>();
-
-        animator.Play(animationName);
     }
 
     [ServerRpc(RequireOwnership = false)]

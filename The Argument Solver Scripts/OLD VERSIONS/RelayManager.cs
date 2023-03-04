@@ -9,7 +9,7 @@ using UnityEngine;
 
 public class RelayManager : NetworkBehaviour
 {
-    public GameObject wrongCode;
+    [SerializeField] GameObject wrongCode;
 
     GameManager gameMan;
 
@@ -19,8 +19,6 @@ public class RelayManager : NetworkBehaviour
 
     UnityTransport transport;
     const int MaxPlayers = 2;
-
-    ulong clientId;
 
     async void Awake()
     {
@@ -33,11 +31,11 @@ public class RelayManager : NetworkBehaviour
         playerData = FindObjectOfType<PlayerData>();
     }
 
-    public void HostOrJoin(int picked, string joinCodeSent)
+    public void CreateOrJoin(int picked, string joinCodeSent)
     {
         if(picked == 1)
         {
-            HostGame();
+            CreateGame();
         }
         else
         {
@@ -51,12 +49,11 @@ public class RelayManager : NetworkBehaviour
         await AuthenticationService.Instance.SignInAnonymouslyAsync();
     }
 
-    async void HostGame()
+    async void CreateGame()
     {
         Allocation a = await RelayService.Instance.CreateAllocationAsync(MaxPlayers);
         joinCode = await RelayService.Instance.GetJoinCodeAsync(a.AllocationId);
 
-        gameMan.SetJoinCode();
         playerData.lobbyCode = joinCode;
 
         transport.SetHostRelayData(a.RelayServer.IpV4, (ushort)a.RelayServer.Port, a.AllocationIdBytes, a.Key, a.ConnectionData);
@@ -66,6 +63,8 @@ public class RelayManager : NetworkBehaviour
 
     async void JoinGame(string sentJoinCode)
     {
+        wrongCode.SetActive(false);
+
         JoinAllocation a;
 
         try
@@ -76,57 +75,39 @@ public class RelayManager : NetworkBehaviour
         {
             wrongCode.SetActive(true);
 
+            gameMan.JoinGameSetup();
+
             return;
         }
 
         transport.SetClientRelayData(a.RelayServer.IpV4, (ushort)a.RelayServer.Port, a.AllocationIdBytes, a.Key, a.ConnectionData, a.HostConnectionData);
 
-        gameMan.ClientJoined();
-
         NetworkManager.Singleton.StartClient();
     }
 
-    public void EndSession()
+    public void EndSession(bool quitting)
     {
         if (!IsServer)
         {
-            EndSessionServerRpc();
+            EndSessionServerRpc(quitting);
 
             return;
         }
 
-        if(IsServer && NetworkManager.ConnectedClientsList.Count > 0)
-        {
-            for(int i= MaxPlayers; i < NetworkManager.ConnectedClientsList.Count; i--)
-            {
-                NetworkManager.Singleton.DisconnectClient((ulong)i);
-            }
-        }
+        NetworkManager.Singleton.DisconnectClient(1);
+
+        NetworkManager.Singleton.DisconnectClient(0);
 
         NetworkManager.Singleton.Shutdown();
     }
 
-    public void DisconnectClientOnly(ulong clientId)
-    {
-        if (!IsServer)
-        {
-            DisconnectClientOnlyServerRpc(clientId);
-        }
-        else
-        {
-            NetworkManager.Singleton.DisconnectClient(clientId); 
-        }
-    }
-
     [ServerRpc(RequireOwnership = false)]
-    public void EndSessionServerRpc()
+    public void EndSessionServerRpc(bool quitting)
     {
-        EndSession();
-    }
+        NetworkManager.Singleton.DisconnectClient(1);
 
-    [ServerRpc(RequireOwnership = false)]
-    public void DisconnectClientOnlyServerRpc(ulong clientId)
-    {
-        DisconnectClientOnly(clientId);
+        NetworkManager.Singleton.DisconnectClient(0);
+
+        NetworkManager.Singleton.Shutdown();
     }
 }
